@@ -1,0 +1,13 @@
+base
+C50
+ggplot2
+dplyr
+lattice
+caret
+pROC
+data.table
+randomForest
+plyr
+e1071
+rpart
+ipred

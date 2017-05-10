@@ -1,0 +1,179 @@
+---
+title: "MIS 6357 - Final Project"
+author: "Achintya Sen"
+date: "May 6, 2017"
+output: pdf_document
+---
+
+---
+title: "MIS 6357 - Final Project"
+author: "Achintya Sen"
+date: "May 6, 2017"
+output: pdf_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r echo=FALSE, include=FALSE}
+library(C50,,quietly = TRUE)
+library(ggplot2,quietly = TRUE)
+library(dplyr,quietly = TRUE)
+library(caret,quietly = TRUE)
+library(pROC,quietly = TRUE)
+library(data.table,quietly = TRUE)
+library(randomForest,quietly = TRUE)
+library(plyr,quietly = TRUE)
+library(e1071,quietly = TRUE)
+```
+
+#Churn Analysis
+##Introduction
+In many industries it is more expensive to find a new customer then to entice an existing one to stay. Looking forward with the motivation to predict customer behavior of a telecom major we are trying to predict the churn rate based on statistical analysis and suggest strategies to improve the services to lower the rate.  
+  
+##Descriptive Statistics
+```{r,cache=TRUE,include=FALSE,echo=FALSE}
+data(churn)
+```
+The dataset is collected from the  MLC++ machine learning software for modeling customer churn. There are 19 predictors, mostly numeric:
+```{r, include=TRUE,echo=FALSE}
+colnames(churnTest[,-ncol(churnTest)])
+churn.test <- churnTest
+```
+As you can see the dataset consist of few factor variables:
+```{r,include=TRUE,echo=FALSE}
+X <- churnTrain[,-20]
+y <- churnTrain[,20]
+str(X[,sapply(X,is.factor)])
+```
+The first step is to have a look at the balance of the outcomes. In this case its binary, either the client has an existing contract with our telecommunications company or they have cancelled it.
+```{r,include=TRUE,echo=FALSE}
+table(churnTrain$churn)
+```
+The overall churn rate is approximately ~15% i.e. 15% of the customers left the service and ~85% decided to continue with the service.The churn rate in individual state is as shown in the table whci has the list of the top 10.
+```{r,include=TRUE,echo=FALSE}
+churn.rate <- table(churnTrain$state,churnTrain$churn)
+churn.rate <- cbind(churn.rate,round((churn.rate[,1]/churn.rate[,2])*100,digits=2))
+colnames(churn.rate) <- c("Churned","Not Churned","Percentage")
+churn.rate <- cbind("states"=rownames(churn.rate),as.data.frame(churn.rate))
+head(arrange(churn.rate,desc(Percentage)),5)
+```
+\pagebreak
+We can also start to form testable ideas about relationships. For example does the “Account Length” field have an impact on if they churn?
+```{r}
+ggplot(churnTrain, aes(x=account_length, fill=churn))+geom_density()+ facet_grid(churn~.) + labs(title="Account Length") + xlab("Account Length")
+```  
+
+##Preprocessing
+We are going to perform some feature selection on the list of factors and the continuous variables. Starting with the continous variables:\
+1. **Check for any degenerative function**: Degenerative variables are those variables which has very little variance. And removing the variable.
+```{r,include=TRUE,echo=FALSE}
+zv_cols = nearZeroVar(X)
+paste(colnames(X[zv_cols]))
+X <- X[,-zv_cols]
+churn.test <- churn.test[,-zv_cols]
+```  
+2. **Remove degenerative Factors**:Degenrative factors are those factor variable which doesnt contribute much to the churn. Among the list of factor variables in the dataset *area_code* is not that significant.
+```{r,include=TRUE,echo=FALSE}
+X$area_code <- NULL
+churn.test$area_code <- NULL
+```
+Let us look at the distribution of state variable and check if the distribution is even.
+```{r,include=TRUE,echo=FALSE}
+table(churnTrain$state)
+```
+The churn rate seems to vary from state to state. We will keep this as a factor variable.  
+  
+##Build Models  
+We will start the process of building an actual model. As there are some imbalance in the number of churned customers and the fact that we really want to predict who will be a churned customer mean we are intrested in sensitivity in our models rather then specificity.
+  
+```{r,include=TRUE,echo=TRUE, warning=FALSE,cache=TRUE}
+#
+source("model_train.R")
+#
+all_models = build_AUC_models( X, y, churn.test )
+```
+```{r, include=TRUE,echo=FALSE, fig.align='center'}
+df = rbind( data.frame(Model="Logistic Regression", auc=paste(round(all_models$glm$auc*100,2),"%")),
+            data.frame(Model="Decision Tree",auc=paste(round(all_models$dt$auc*100,2),"%")),
+            data.frame(Model="Random Forest", auc=paste(round(all_models$rf$auc*100,2),"%")), 
+            data.frame(Model="Bagged Trees", auc=paste(round(all_models$bag$auc*100,2),"%")),
+            make.row.names = FALSE)
+print( "AUC Performance" )
+print( df )
+plot(all_models$rf$classifier)
+```  
+We will build our confusion matrix and the ROC curve based on the random forest:
+```{r Confusion_Matrix, include=TRUE,echo=FALSE}
+pred.rf<-predict(all_models$rf$classifier, newdata=churn.test[,-ncol(churn.test)])
+confusionMatrix(pred.rf,churn.test[,ncol(churn.test)])
+
+```
+```{r ROC_Curve, include=TRUE,echo=FALSE,cache=TRUE, fig.align='center'}
+plot( all_models$rf$roc, legacy.axes=T, add=F, col="black" )
+```
+  
+Let us find the factors that seem to be driving customer churn. Based on our model the variables driving churn based on the mean decrease in the gini index:
+```{r Important_Variable, include=TRUE,echo=FALSE}
+imp <- data.frame(importance(all_models$rf$classifier$finalModel))
+imp
+imp <- cbind(variable=rownames(imp),mean.desc.Gini=imp)
+#plot(imp,x = seq(1:nrow(imp)))
+```
+
+As random forest is an ensemble technique encapsulating multiple trees, interpretation on individual features and splits to define strategies is a complex technique. Instead based on the important variables found by the random forest we will try to build a decision tree and optimize it to gain further insight.  
+We can set an arbitary threshold of *30.00* to select the important features which contrubutes the maximum in defining the customer churn behavior. Further optimization can be performed to select the threshold to fine tune the tree.  
+```{r,include=TRUE,echo=FALSE}
+selected.feature <- filter(imp,MeanDecreaseGini>30)
+arrange(selected.feature,desc(MeanDecreaseGini))
+```
+At this intersection, we can start build strategies on the characteritics that is driving cutomer churn. The major questions we can derive are:  
+1.**state** - Customers belonging to selected states are more susceptible to churn. Which are those states?  
+2. **total_day_charge** - What is the charge per day of the customers? At what threshold should we target the customers with better strategies?  
+3. **total_day_minutes** - After how much time the customer can think of changing the network provider?  
+4. **number_customer_service_calls** - On an average after how many service call make the customer frustrated?  
+\pagebreak
+  
+##Build the best tree-based predictive model  
+We will start by building our decision tree and optimise it to get the best result, utilizng which we will build our assumptions and actions.
+```{r,include=FALSE,echo=FALSE}
+sel.X <- churnTrain[,selected.feature$variable]
+sel.y <- churnTrain[,ncol(churnTrain)]
+sel.test <- cbind(churnTest[,selected.feature$variable],churnTest[,ncol(churnTest)])
+```
+```{r,include=TRUE,echo=TRUE,cache=TRUE}
+source("build_decision_tree.R")
+build_decision_tree
+```
+```{r,include=FALSE,echo=FALSE,warning=FALSE,cache=TRUE}
+#
+#Build and optimize decision trees
+#
+best.model <- build_decision_tree(sel.X,sel.y,sel.test)
+plot(best.model$classifier)
+```  
+We will build our confusion matrix and the ROC curve based on the decision tree:
+```{r}
+confusionMatrix(best.model$pred.result,sel.test[,ncol(sel.test)])
+```
+```{r,include=TRUE,echo=FALSE,,fig.align='center'}
+rpart.plot::rpart.plot(best.model$classifier$finalModel)
+```
+\pagebreak
+  
+##Interpretation and Recommendation
+We re-calculate our important variables contributing towards the customer behavior.
+```{r ,include=TRUE,echo=FALSE}
+imp.dtree <- data.frame(varImp(best.model$classifier$finalModel))
+imp.dtree <- cbind(Variable=rownames(imp.dtree),Overall=imp.dtree)
+arrange(imp.dtree,desc(Overall))
+```
+We can see the major criteria for churn is contributed by the *total_day_charge*, *total_eve_minutes*, *international_plan*. As we are proceeding towards a targetted approach towards the customers we would like to gain and undertsanding which customers to target.
+```{r}
+cust <- cbind(churn.test[,-ncol(churn.test)],probability=round(best.model$pred.prob[,1],2))
+ggplot(cust,aes(probability))+geom_histogram(bins = 30,binwidth = 0.1)
+```
+We can device our targeted customers by choosing a threshold for the estimated probability. We need to keep in mind the cutomers who are at the lower end of the distributed who are most likely to churn irrespective of the approah we follow to stop them.  
+Let delve deep into the various startegies that can be built on the model.  
+1. *total_day_charge* which is the major classification factor in defining the tree can be used to set threshold for customers whose *total_day_time* reduces a certain limit. We can target these customers with lesser talk plans so that we can reach a break-even. Charges are a mjor factor in customer churn as higher price will lead to customer behavior change. These customers need to be targetted with proper plans to optimize the bills.  
+2. *total_eve_minutes* is a significant criteria wherein the customers with less frequency in the evening is more likely to churn. The value estimated by the model can be used to generate the population parameter confidence interval.  
+3. *international_plan* is particularly significant in situations where in the customer has not opted for the internation plan but has internation outgoing calls. As international call plans are expensive and most customers prefer to not use, the targetted approach is to judiciously send to customers who will be crossing a threshold.  
